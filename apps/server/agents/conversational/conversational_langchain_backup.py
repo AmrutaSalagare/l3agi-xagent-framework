@@ -1,17 +1,13 @@
 import asyncio
-import os
-import sys
 
-# Add XAgent to Python path
-xagent_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'XAgent')
-if xagent_path not in sys.path:
-    sys.path.insert(0, xagent_path)
+from langchain import hub
+from langchain.agents import (AgentExecutor, AgentType, create_react_agent,
+                              initialize_agent)
 
 from agents.base_agent import BaseAgent
 from agents.conversational.output_parser import ConvoOutputParser
 from agents.conversational.streaming_aiter import AsyncCallbackHandler
 from agents.handle_agent_errors import handle_agent_error
-from agents.xagent_integration import L3AGIXAgentAdapter
 from config import Config
 from memory.zep.zep_memory import ZepMemory
 from postgres import PostgresChatMessageHistory
@@ -61,28 +57,73 @@ class ConversationalAgent(BaseAgent):
                 configs = agent_with_configs.configs
                 prompt = speech_to_text(voice_url, configs, voice_settings)
 
-            # Initialize XAgent adapter
-            xagent_adapter = L3AGIXAgentAdapter(
-                config=agent_with_configs.configs,
-                tools=tools,
-                system_message=system_message,
-                memory=memory
+            llm = get_llm(
+                settings,
+                agent_with_configs,
             )
 
-            # Create streaming response using XAgent
-            streaming_response = []
-            
-            try:
-                async for chunk in xagent_adapter.astream(prompt):
-                    if chunk:
-                        streaming_response.append(chunk)
-                        yield chunk
-                        
-                res = "".join(streaming_response)
-            except Exception as e:
-                # Fallback to non-streaming response
-                res = await xagent_adapter.arun(prompt)
-                yield res
+            streaming_handler = AsyncCallbackHandler()
+
+            llm.streaming = True
+            # llm.callbacks = [
+            #     run_logs_manager.get_agent_callback_handler(),
+            #     streaming_handler,
+            # ]
+
+            # agent = initialize_agent(
+            #     tools,
+            #     llm,
+            #     agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+            #     verbose=True,
+            #     memory=memory,
+            #     handle_parsing_errors="Check your output and make sure it conforms!",
+            #     agent_kwargs={
+            #         "system_message": system_message,
+            #         "output_parser": ConvoOutputParser(),
+            #     },
+            #     callbacks=[run_logs_manager.get_agent_callback_handler()],
+            # )
+
+            agentPrompt = hub.pull("hwchase17/react")
+
+            agent = create_react_agent(llm, tools, prompt=agentPrompt)
+
+            agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+            chunks = []
+            final_answer_detected = False
+
+            async for event in agent_executor.astream_events(
+                {"input": prompt}, version="v1"
+            ):
+                kind = event["event"]
+
+                if kind == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        chunks.append(content)
+                        # Check if the last three elements in chunks, when stripped, are "Final", "Answer", and ":"
+                        if (
+                            len(chunks) >= 3
+                            and chunks[-3].strip() == "Final"
+                            and chunks[-2].strip() == "Answer"
+                            and chunks[-1].strip() == ":"
+                        ):
+                            final_answer_detected = True
+                            continue
+
+                        if final_answer_detected:
+                            yield content
+
+            full_response = "".join(chunks)
+            final_answer_index = full_response.find("Final Answer:")
+            if final_answer_index != -1:
+                # Add the length of the phrase "Final Answer:" and any subsequent whitespace or characters you want to skip
+                start_index = final_answer_index + len("Final Answer:")
+                # Optionally strip leading whitespace
+                res = full_response[start_index:].lstrip()
+            else:
+                res = "Final Answer not found in response."
 
         except Exception as err:
             res = handle_agent_error(err)
