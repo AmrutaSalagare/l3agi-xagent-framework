@@ -1,18 +1,11 @@
-import os
-import sys
 from typing import List, Optional
 
-# Add XAgent to Python path
-xagent_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..', 'XAgent')
-if xagent_path not in sys.path:
-    sys.path.insert(0, xagent_path)
-
+from langchain.agents import AgentType, initialize_agent
 from langchain.schema import AIMessage, SystemMessage
 from langchain_community.chat_models import ChatOpenAI
 
 from agents.agent_simulations.agent.dialogue_agent import DialogueAgent
 from agents.conversational.output_parser import ConvoOutputParser
-from agents.xagent_integration import L3AGIXAgentAdapter
 from config import Config
 from memory.zep.zep_memory import ZepMemory
 from services.run_log import RunLogsManager
@@ -42,7 +35,8 @@ class DialogueAgentWithTools(DialogueAgent):
 
     def send(self) -> str:
         """
-        Applies XAgent to the message history and returns the message string
+        Applies the chatmodel to the message history
+        and returns the message string
         """
 
         memory: ZepMemory
@@ -60,22 +54,34 @@ class DialogueAgentWithTools(DialogueAgent):
         memory.human_name = self.sender_name
         memory.ai_name = self.agent_with_configs.agent.name
         memory.auto_save = False
+        # else:
+        #     memory = ConversationBufferMemory(
+        #         memory_key="chat_history", return_messages=True
+        #     )
 
-        # Initialize XAgent adapter
-        xagent_adapter = L3AGIXAgentAdapter(
-            config=self.agent_with_configs.configs,
-            tools=self.tools,
-            system_message=self.system_message.content,
-            memory=memory
+        callbacks = []
+
+        if self.run_logs_manager:
+            self.model.callbacks = [self.run_logs_manager.get_agent_callback_handler()]
+            callbacks.append(self.run_logs_manager.get_agent_callback_handler())
+
+        agent = initialize_agent(
+            self.tools,
+            self.model,
+            agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+            verbose=True,
+            handle_parsing_errors=True,
+            memory=memory,
+            callbacks=callbacks,
+            agent_kwargs={
+                "system_message": self.system_message.content,
+                "output_parser": ConvoOutputParser(),
+            },
         )
 
         prompt = "\n".join(self.message_history + [self.prefix])
 
-        try:
-            # Use XAgent to process the prompt
-            res = xagent_adapter.run(prompt)
-        except Exception as e:
-            res = f"Error in XAgent execution: {str(e)}"
+        res = agent.run(input=prompt)
 
         # FIXME: is memory
         # memory.save_ai_message(res)
