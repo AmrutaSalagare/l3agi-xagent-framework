@@ -1,0 +1,48 @@
+# L3AGI + XAgent Integration Requirements
+
+# XAgent Core Dependencies
+charset_normalizer
+colorama
+fastapi
+jsonschema
+Markdown
+orjson
+Pillow
+pydantic
+PyYAML
+regex
+Requests
+setuptools
+termcolor
+tiktoken
+tqdm
+uvicorn
+json5
+openai
+python-dotenv
+sqlalchemy
+tenacity
+redis
+pymysql
+yagmail
+python-multipart
+apscheduler
+pinecone-client
+websockets
+cryptography
+inputimeout
+pytest
+
+# Langchain (for compatibility during migration)
+langchain
+langchain-community
+langsmith
+
+# Additional dependencies that might be needed
+asyncio
+typing-extensions
+uuid
+abc
+contextlib
+argparse
+copy
